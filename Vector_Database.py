@@ -54,11 +54,8 @@ splitter=RecursiveCharacterTextSplitter(
 # 2.读取论文并切割转化为向量放入向量数据库
 def build_database():
     """
-    数据库为空时 读取 PDF、切分、生成向量，并写入本地 Chroma
+    pdf没入库时 读取 PDF、切分、生成向量，并写入本地 Chroma
     """
-    if db._collection.count() > 0:
-        print(f"数据库已有 {db._collection.count()} 条记录，跳过建库。")
-        return
     if not DOCS_DIR.exists():
         print(f"论文文件夹不存在：{DOCS_DIR}")
         return
@@ -66,17 +63,22 @@ def build_database():
     if not pdf_files:
         print(f"没有在 {DOCS_DIR} 中找到 PDF。")
         return
+
     for pdf_path in pdf_files:
+        # 查 Chroma：是否已经有这篇论文的记录
+        existing=db._collection.get(
+            where={"source": pdf_path.name},
+            include=["metadatas"]
+        )
+        if existing["ids"]:
+            print(f"已存在，跳过：{pdf_path.name}")
+            continue
+
+        # 只处理尚未入库的论文
         reader = PdfReader(pdf_path)
         text = "\n".join(page.extract_text() or "" for page in reader.pages)
-        # print(f"\n--- {pdf_path.name} ---")
-        # print(text[:1000])  # 先看前 1000 个字符
-
         #切分成文本块
         chunks=splitter.split_text(text)
-        # for i, chunk in enumerate(chunks):
-        #     print(f"\nchunk{i}:",chunk)
-
         ##筛选文本块 去掉空白块
         chunks = [chunk for chunk in chunks if chunk.strip()]
 
@@ -90,7 +92,8 @@ def build_database():
                dimensions=1024,
                encoding_format="float"
            )
-           #转化为向量
+           #转化为向量 按字段进行排序
+           response_data = sorted(response.data, key=lambda item: item.index)
            batch_vectors=[item.embedding for item in response.data]#response.data是一个列表
            # 为每个文本块记录论文文件名和块序号（主键）
            ids = [
@@ -130,27 +133,68 @@ def embed_query(text:str):
     )
     return resp.data[0].embedding
 
+#定义检索器
+def retrieve_context(question):
+    docs = db.similarity_search_by_vector(
+        embed_query(question),
+        k=5,
+    )
+
+    if not docs:
+        return "没有检索到相关论文内容。"
+
+    return "\n\n".join(
+        f"[论文：{doc.metadata.get('source', '未知')}]\n"
+        f"{doc.page_content}"
+        for doc in docs
+    )
+
+#带有历史记录的检索
+def retrieve_context_with_history(inputs):
+    question = inputs["question"]
+    history = inputs.get("history", "")
+
+    search_query = f"""
+    对话历史：
+    {history}
+    
+    当前问题：
+    {question}
+    """
+    return retrieve_context(search_query)
+
 def make_chain():
     """
     创建检索问答链
     """
-    #定义检索器 将document对象转化为字符串
-    retriever=RunnableLambda(
-     lambda question: "\n\n".join(
-            doc.page_content
-            for doc in db.similarity_search_by_vector(embed_query(question), k=3)
-        )
-    )
     #定义prompt
-    messages="""
-        使用提供的上下文仅回答这个问题:
-        {question}
-        上下文：
-        {context}
+    messages = """
+    你是一名严谨的论文阅读助手。请根据检索到的论文片段回答用户问题。
+
+    规则：
+    1. 论文事实只能依据检索到的论文片段，不要编造。
+    2. 历史对话只用于理解上下文，不能当作论文证据。
+    3. 如果论文片段不足以回答，明确说明。
+    4. 回答时先直接回答，再简要说明依据。
+    5. 在相关陈述后标注论文来源。
+    6. 使用与当前问题相同的语言回答。
+
+    历史对话：
+    {history}
+
+    用户当前问题：
+    {question}
+
+    检索到的论文片段：
+    {context}
     """
     prompt_temp=ChatPromptTemplate.from_messages([("human",messages)])
     #定义链
-    chain= {'question':RunnablePassthrough(),'context':retriever,} | prompt_temp | qa_model
+    chain=  {
+            "question": RunnableLambda(lambda inputs: inputs["question"]),
+            "history": RunnableLambda(lambda inputs: inputs.get("history", "")),
+            "context": RunnableLambda(retrieve_context_with_history)
+        } | prompt_temp | qa_model
     return chain
 
 #5.做成可用工具
@@ -186,5 +230,10 @@ def main():
 if __name__ == "__main__":
     main()
 
+#检索优化 向量检索+关键词检索
 
+#记录对话历史
 
+#把模型名、API Key、top-k 放到 config 文件里
+
+#FastAPI 包装
