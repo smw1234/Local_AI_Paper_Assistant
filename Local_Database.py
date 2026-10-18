@@ -2,6 +2,8 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from langchain_deepseek import ChatDeepSeek
 from openai import OpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -50,59 +52,139 @@ splitter=RecursiveCharacterTextSplitter(
     ]
 )
 # 2.读取论文并切割转化为向量放入向量数据库
-for pdf_path in DOCS_DIR.glob("*.pdf"):
-    reader = PdfReader(pdf_path)
-    text = "\n".join(page.extract_text() or "" for page in reader.pages)
-    # print(f"\n--- {pdf_path.name} ---")
-    # print(text[:1000])  # 先看前 1000 个字符
+def build_database():
+    """
+    数据库为空时 读取 PDF、切分、生成向量，并写入本地 Chroma
+    """
+    if db._collection.count() > 0:
+        print(f"数据库已有 {db._collection.count()} 条记录，跳过建库。")
+        return
+    if not DOCS_DIR.exists():
+        print(f"论文文件夹不存在：{DOCS_DIR}")
+        return
+    pdf_files = list(DOCS_DIR.glob("*.pdf"))
+    if not pdf_files:
+        print(f"没有在 {DOCS_DIR} 中找到 PDF。")
+        return
+    for pdf_path in pdf_files:
+        reader = PdfReader(pdf_path)
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        # print(f"\n--- {pdf_path.name} ---")
+        # print(text[:1000])  # 先看前 1000 个字符
 
-    #切分成文本块
-    chunks=splitter.split_text(text)
-    # for i, chunk in enumerate(chunks):
-    #     print(f"\nchunk{i}:",chunk)
+        #切分成文本块
+        chunks=splitter.split_text(text)
+        # for i, chunk in enumerate(chunks):
+        #     print(f"\nchunk{i}:",chunk)
 
-    ##筛选文本块 去掉空白块
-    chunks = [chunk for chunk in chunks if chunk.strip()]
+        ##筛选文本块 去掉空白块
+        chunks = [chunk for chunk in chunks if chunk.strip()]
 
-    #建立本地向量索引
-    vectors_count = 0 #记录当前文件向量总数
-    for start in range(0, len(chunks), 10):#每十个文本块一组 0 10 20
-       batch = chunks[start:start+10]#放入batch里
-       response=client.embeddings.create(
-           model="text-embedding-v3",
-           input=batch,
-           dimensions=1024,
-           encoding_format="float"
-       )#转化为向量
-       batch_vectors=[item.embedding for item in response.data]#response.data是一个列表
-       # 为每个文本块记录论文文件名和块序号（主键）
-       ids = [
-           f"{pdf_path.name}-chunk-{start + i}"
-           for i in range(len(batch))
-       ]
-       #生成元数据(属性）
-       metadatas = [
-           {
-               "source": pdf_path.name,
-               "chunk_index": start + i,
-           }
-           for i in range(len(batch))
-       ]
-       # 写入本地 Chroma
-       db._collection.upsert(
-           ids=ids,
-           documents=batch,#存入文本
-           embeddings=batch_vectors,#存入向量
-           metadatas=metadatas,
-       )
-       vectors_count += len(batch_vectors)
+        #建立本地向量索引
+        vectors_count = 0 #记录当前文件向量总数
+        for start in range(0, len(chunks), 10):#每十个文本块一组 0 10 20
+           batch = chunks[start:start+10]#放入batch里
+           response=client.embeddings.create(
+               model="text-embedding-v3",
+               input=batch,
+               dimensions=1024,
+               encoding_format="float"
+           )
+           #转化为向量
+           batch_vectors=[item.embedding for item in response.data]#response.data是一个列表
+           # 为每个文本块记录论文文件名和块序号（主键）
+           ids = [
+               f"{pdf_path.name}-chunk-{start + i}"
+               for i in range(len(batch))
+           ]
+           #生成元数据(属性）
+           metadatas = [
+               {
+                   "source": pdf_path.name,
+                   "chunk_index": start + i,
+               }
+               for i in range(len(batch))
+           ]
+           # 写入本地 Chroma
+           db._collection.upsert(
+               ids=ids,
+               documents=batch,#存入文本
+               embeddings=batch_vectors,#存入向量
+               metadatas=metadatas,
+           )
+           vectors_count += len(batch_vectors)
 
-    print(f"{pdf_path.name}: {len(chunks)} 个文本块，{vectors_count} 个向量")
-print(f"向量数据库位置：{DB_DIR.resolve()}")
+        print(f"{pdf_path.name}: {len(chunks)} 个文本块，{vectors_count} 个向量")
+    print(f"向量数据库位置：{DB_DIR.resolve()}")
 
 #4.实现问答
+def embed_query(text:str):
+    """
+    手动将用户问题转化为向量
+    """
+    resp=client.embeddings.create(
+        model="text-embedding-v3",
+        input=[text],
+        dimensions=1024,
+        encoding_format="float"
+    )
+    return resp.data[0].embedding
+
+def make_chain():
+    """
+    创建检索问答链
+    """
+    #定义检索器 将document对象转化为字符串
+    retriever=RunnableLambda(
+     lambda question: "\n\n".join(
+            doc.page_content
+            for doc in db.similarity_search_by_vector(embed_query(question), k=3)
+        )
+    )
+    #定义prompt
+    messages="""
+        使用提供的上下文仅回答这个问题:
+        {question}
+        上下文：
+        {context}
+    """
+    prompt_temp=ChatPromptTemplate.from_messages([("human",messages)])
+    #定义链
+    chain= {'question':RunnablePassthrough(),'context':retriever,} | prompt_temp | qa_model
+    return chain
 
 #5.做成可用工具
+def chat_loop(chain):
+    """循环接收问题，输入 q 或 exit 退出。"""
+    print("\n论文助手已启动。输入 q 或 exit 退出。")
+
+    while True:
+        question = input("\n请输入问题：").strip()
+
+        if question.lower() in {"q", "exit"}:
+            print("已退出。")
+            break
+
+        if not question:
+            continue
+
+        try:
+            result = chain.invoke(question)
+            print("\n回答：")
+            print(result.content)
+        except Exception as e:
+            print(f"问答时出错：{e}")
+
+def main():
+    # 首次运行或添加了新论文时，调用这个函数建库
+    build_database()
+    # 创建问答链并进入交互循环
+    chain = make_chain()
+    chat_loop(chain)
+
+
+if __name__ == "__main__":
+    main()
 
 
 
