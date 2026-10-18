@@ -135,6 +135,7 @@ button { color: inherit; }
 
 .header-eyebrow { margin-bottom: 4px; color: #a1a69f; font-size: 9px; font-weight: 700; letter-spacing: 1.5px; }
 .chat-header h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.conversation-id { margin-top: 4px; color: #92978f; font-size: 11px; }
 .connection-status { display: flex; align-items: center; gap: 8px; color: #888e86; font-size: 12px; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #72a582; box-shadow: 0 0 0 3px #edf5ef; }
 

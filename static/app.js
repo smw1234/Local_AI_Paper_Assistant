@@ -3,6 +3,7 @@ const STORAGE_KEY = "thesis-assistant-conversations-v1";
 const historyList = document.getElementById("historyList");
 const messageArea = document.getElementById("messageArea");
 const titleElement = document.getElementById("conversationTitle");
+const conversationIdElement = document.getElementById("conversationId");
 const input = document.getElementById("questionInput");
 const form = document.getElementById("chatForm");
 const sendButton = document.getElementById("sendButton");
@@ -33,39 +34,16 @@ function activeConversation() {
   return conversations.find((conversation) => conversation.id === activeConversationId) || null;
 }
 
-async function startNewConversation() {
+function startNewConversation() {
   const current = activeConversation();
-
-  // 已经是空白新对话时复用它，避免历史记录中堆积空会话。
-  if (current && current.messages.length === 0) {
-    window.alert("当前已经是一个新对话。");
-    return;
-  }
-
   if (current && !window.confirm("开启新对话？当前对话会保留在历史记录中。")) {
     return;
   }
-
-  let sessionId;
-  try {
-    const response = await fetch("/api/sessions", { method: "POST" });
-    const result = await response.json();
-    if (!response.ok || result.code !== 200 || !result.data) {
-      throw new Error(result.message || `HTTP ${response.status}`);
-    }
-    sessionId = result.data;
-  } catch (error) {
-    console.error("创建会话失败:", error);
-    window.alert(`创建会话失败：${error.message}`);
-    return;
-  }
-
-  const conversation = { id: sessionId, title: "新对话", messages: [], updatedAt: Date.now() };
-  conversations.unshift(conversation);
-  activeConversationId = conversation.id;
-  saveConversations();
-  titleElement.textContent = conversation.title;
-  renderMessages(conversation.messages);
+  // 这里只显示前端草稿；第一次发送问题时才在后端创建并保存会话。
+  activeConversationId = null;
+  titleElement.textContent = "新对话";
+  conversationIdElement.textContent = "";
+  renderMessages([]);
   renderHistory();
   input.focus();
 }
@@ -86,6 +64,7 @@ async function openConversation(id) {
     activeConversationId = id;
     saveConversations();
     titleElement.textContent = conversation.title;
+    conversationIdElement.textContent = id;
     renderMessages(conversation.messages);
     renderHistory();
   } catch (error) {
@@ -194,9 +173,25 @@ async function askBackend(question, conversationId) {
 async function sendQuestion(question) {
   let conversation = activeConversation();
   if (!conversation) {
-    await startNewConversation();
-    conversation = activeConversation();
-    if (!conversation) return;
+    try {
+      const response = await fetch("/api/sessions", { method: "POST" });
+      const result = await response.json();
+      if (!response.ok || result.code !== 200 || !result.data) {
+        throw new Error(result.message || `HTTP ${response.status}`);
+      }
+      conversation = {
+        id: result.data,
+        title: "新对话",
+        messages: [],
+        updatedAt: Date.now(),
+      };
+      conversations.unshift(conversation);
+      activeConversationId = conversation.id;
+      conversationIdElement.textContent = conversation.id;
+    } catch (error) {
+      window.alert(`创建会话失败：${error.message}`);
+      return;
+    }
   }
 
   setTitleFromQuestion(conversation, question);
@@ -265,15 +260,24 @@ async function initializeSessions() {
       id, title: id, messages: [], updatedAt: Date.now(),
     });
     saveConversations();
-    if (ids.length) await openConversation(ids[0]);
-    else await startNewConversation();
+    renderHistory();
+    // 不自动打开历史会话；进入页面始终显示未保存的新对话草稿。
+    activeConversationId = null;
+    titleElement.textContent = "新对话";
+    conversationIdElement.textContent = "";
+    renderMessages([]);
+    renderHistory();
   } catch (error) {
     console.error("查询历史记录失败:", error);
     window.alert(`查询历史记录失败：${error.message}`);
     renderHistory();
     // 与参考前端一致：历史查询失败后仍尝试创建一个新会话，
     // 因此 Network 面板会分别显示 GET 和 POST /api/sessions。
-    await startNewConversation();
+    activeConversationId = null;
+    titleElement.textContent = "新对话";
+    conversationIdElement.textContent = "";
+    renderMessages([]);
+    renderHistory();
   }
 }
 
