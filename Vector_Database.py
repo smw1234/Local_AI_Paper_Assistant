@@ -137,7 +137,7 @@ def embed_query(text:str):
 def retrieve_context(question):
     docs = db.similarity_search_by_vector(
         embed_query(question),
-        k=5,
+        k=8,
     )
 
     if not docs:
@@ -231,9 +231,10 @@ if __name__ == "__main__":
     main()
 
 #检索优化 向量检索+关键词检索
+         #查询改写：先让模型改写问题再检索 提高检索命中率
+#docker部署
+#agent接入
+#mcp server
+#文件上传
 
-#记录对话历史
 
-#把模型名、API Key、top-k 放到 config 文件里
-
-#FastAPI 包装
