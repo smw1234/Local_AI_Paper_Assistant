@@ -97,6 +97,42 @@ def chat(request:ChatRequest)->ApiResponse:
 
     return ApiResponse(code=200,message="请求成功",data=answer_text)
 
+#获取历史会话列表
+@app.get("/api/sessions")
+def get_sessions()->ApiResponse:
+    #获取目录下文件名
+    session_files=os.listdir("sessions")
+    #获取会话id
+    session_ids= [file.split(".")[0] for file in session_files]
+    #倒序排序
+    session_ids.sort(reverse=True)
+    return ApiResponse(code=200,message="会话列表获取成功",data=session_ids)
+
+#加载指定的历史会话
+@app.get("/api/sessions/{session_id}")
+def get_session(session_id:str)->ApiResponse:
+    print("session found")
+    #获取会话文件名-读取会话文件-返回数据
+    session_file=get_session_file_name(session_id)
+    with open(session_file,"r",encoding="utf-8") as f:
+        session_data = json.load(f)
+    return ApiResponse(code=200,message="加载会话成功",data=session_data)
+
+#删除会话
+@app.delete("/api/sessions/{session_id}")
+def get_session(session_id:str)->ApiResponse:
+    file_name=get_session_file_name(session_id)
+    if os.path.exists(file_name):
+       os.remove(file_name)
+    return ApiResponse(code=200,message="删除成功",data=None)
+
+#异常处理器
+@app.exception_handler(Exception)
+def handle_exception(request: Request, exc: Exception):
+    logging.error(f"处理异常，请求路径：{request.url},异常信息：{exc}")
+    return JSONResponse(content={"code":500,"message":"服务器内部错误","data":None})
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=9000)
