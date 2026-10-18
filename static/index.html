@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Thesis Assistant</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <h1 class="brand">Thesis Assistant</h1>
+      <button class="new-chat-button" id="newChatButton" type="button">
+        <span class="plus-icon" aria-hidden="true">+</span>
+        <span>开启新对话</span>
+      </button>
+
+      <div class="history-heading">历史记录</div>
+      <div class="history-list" id="historyList" aria-label="历史会话"></div>
+      <div class="sidebar-footer">本地论文问答助手</div>
+    </aside>
+
+    <main class="chat-panel">
+      <header class="chat-header">
+        <div>
+          <div class="header-eyebrow">THESIS ASSISTANT</div>
+          <h2 id="conversationTitle">新对话</h2>
+        </div>
+        <div class="connection-status"><span class="status-dot"></span>准备就绪</div>
+      </header>
+
+      <section class="message-area" id="messageArea" aria-live="polite">
+        <div class="welcome-card" id="welcomeCard">
+          <div class="welcome-mark">T</div>
+          <h3>开始阅读你的论文</h3>
+          <p>提出问题，我会根据已导入的论文内容为你查找答案。</p>
+        </div>
+      </section>
+
+      <form class="composer" id="chatForm">
+        <label class="visually-hidden" for="questionInput">输入问题</label>
+        <textarea id="questionInput" rows="1" placeholder="询问你的论文……" autocomplete="off"></textarea>
+        <button class="send-button" id="sendButton" type="submit" aria-label="发送" title="发送">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12 20 4.8l-4.2 14.4-3.1-5.7-8.2-1.5Zm8.2 1.5 3.4-4.1"/></svg>
+        </button>
+        <div class="composer-hint">Enter 发送 · Shift + Enter 换行</div>
+      </form>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
