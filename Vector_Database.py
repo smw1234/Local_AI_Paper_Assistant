@@ -8,6 +8,9 @@ from langchain_deepseek import ChatDeepSeek
 from openai import OpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
+import re
+from rank_bm25 import BM25Okapi
+from langchain_core.documents import Document
 
 load_dotenv(override=True)
 
@@ -134,27 +137,54 @@ def embed_query(text:str):
     return resp.data[0].embedding
 
 #定义检索器
-def retrieve_context(question):
-    docs = db.similarity_search_by_vector(
-        embed_query(question),
-        k=8,
+def retrieve_context(query,k=8):
+    """向量检索和 BM25 关键词检索，再用 RRF 合并排名。"""
+    #向量检索
+    vector_docs = db.similarity_search_by_vector(
+        embed_query(query),#把查询问题转化为向量
+        k=k,
     )
+    #关键词检索
+    keyword_docs = keyword_search(query, k=k)
+    #准备融合
+    fused_scores = {}#记录每个文档的分数
+    docs_by_key = {}#记录每个文档快的原文
+    #把两个榜单里出现的所有文档块，计算分数存入fused_scores，对应的文档存入docs_by_key
+    for ranked_docs in (vector_docs, keyword_docs):#外层循环两次 一次向量列表 一个关键词列表
+        for rank, doc in enumerate(ranked_docs, start=1):#序号从1开始，元素先是向量k个后是k个关键词
+            #元数据取出
+            key = (
+                doc.metadata.get("source"),
+                doc.metadata.get("chunk_index"),
+            )
+            #计算分数对应存入 同一个文本块同时出现在两个榜单里分数会累加
+            fused_scores[key] = fused_scores.get(key, 0) + 1 / (60 + rank)
+            docs_by_key[key] = doc
+    #按融合分数排序 对fused_scores进行排序，排序依据是value 取前k
+    ranked_keys = sorted(
+        fused_scores,
+        key=fused_scores.get,
+        reverse=True,
+    )[:k]
 
-    if not docs:
+    if not ranked_keys:
         return "没有检索到相关论文内容。"
 
     return "\n\n".join(
-        f"[论文：{doc.metadata.get('source', '未知')}]\n"
-        f"{doc.page_content}"
-        for doc in docs
+        f"[论文：{docs_by_key[key].metadata.get('source', '未知')}]\n"
+        f"{docs_by_key[key].page_content}"
+        for key in ranked_keys
     )
 
+#将问题结合历史记录进行改写
 rewrite_p="""
 根据对话历史，把用户当前问题改写成一个独立、明确、适合检索论文内容的问题。
 要求：
 1. 解决“它”“这个方法”“上述结果”等指代。
 2. 保留当前问题的本意，不要回答问题，不要添加历史中没有的信息。
 3. 只输出改写后的问题，不要解释。
+4.论文是英文的。请将当前问题改写成简洁、明确的英文检索问题。
+5.只输出英文检索问题，不要回答。
 
 对话历史：
 {history}
@@ -178,8 +208,51 @@ def rewrite_question(question, history):
 
     rewritten = result.content.strip()
     return rewritten or question
-            
-            
+
+
+def tokenize(text):
+    """把英文文本拆成单个的小写关键词，只保留字母和数字。"""
+    #re是正则表达式 r:\不是转义字符 [a-zA-Z0-9]+：任连续一串字母（不分大小写）或数字 +表示连续
+    return re.findall(r"[a-zA-Z0-9]+", text.lower())
+
+def keyword_search(query, k=8):
+    """从 Chroma 取出文本块，用 BM25算法按关键词匹配度进行打分，取分数最高的k个返回。"""
+    stored = db._collection.get(
+        include=["documents", "metadatas"]
+    )
+    texts = stored.get("documents") or []
+    metadatas = stored.get("metadatas") or []
+    if not texts:
+        return []
+    #把文本块和问题进行切词
+    tokenized_texts = [tokenize(text or "") for text in texts]
+    query_tokens = tokenize(query)
+    if not query_tokens:
+        return []
+    #构建BM25模型 传入全部预料
+    bm25 = BM25Okapi(tokenized_texts)
+    #根据问题关键词给所有文档打分 分数越高越相关 返回分数列表
+    scores = bm25.get_scores(query_tokens)
+    #按分数排序索引 排分数会到底对不上文档
+    ranked_indexes = sorted(
+        range(len(scores)),
+        key=lambda i: scores[i],
+        reverse=True,#降序
+    )
+    #按照索引排名，将前k个最相关的文档和元数据打包返回
+    results = []
+    for i in ranked_indexes:
+        if scores[i] <= 0:
+            break
+        results.append(
+            Document(
+                page_content=texts[i],
+                metadata=metadatas[i] or {},
+            )
+        )
+        if len(results) >= k:
+            break
+    return results
 
 #带有历史记录的检索
 def retrieve_context_with_history(inputs):
@@ -190,6 +263,7 @@ def retrieve_context_with_history(inputs):
      print(f"原问题：{question}")
      print(f"改写后的检索问题：{search_query}")
      return retrieve_context(search_query)
+
 
 def make_chain():
     """
@@ -258,8 +332,6 @@ def main():
 if __name__ == "__main__":
     main()
 
-#检索优化 向量检索+关键词检索
-#docker部署
 
 
 
