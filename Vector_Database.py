@@ -149,19 +149,47 @@ def retrieve_context(question):
         for doc in docs
     )
 
+rewrite_p="""
+根据对话历史，把用户当前问题改写成一个独立、明确、适合检索论文内容的问题。
+要求：
+1. 解决“它”“这个方法”“上述结果”等指代。
+2. 保留当前问题的本意，不要回答问题，不要添加历史中没有的信息。
+3. 只输出改写后的问题，不要解释。
+
+对话历史：
+{history}
+
+当前问题：
+{question}
+
+改写后的检索问题：
+"""
+def rewrite_question(question, history):
+    """结合历史，把当前问题改写成适合检索的独立问题。"""
+    if not history.strip():
+        return question
+    rewrite_prompt = ChatPromptTemplate.from_messages([("human", rewrite_p)])
+    result = qa_model.invoke(
+        rewrite_prompt.format_messages(
+            history=history,
+            question=question,
+        )
+    )
+
+    rewritten = result.content.strip()
+    return rewritten or question
+            
+            
+
 #带有历史记录的检索
 def retrieve_context_with_history(inputs):
-    question = inputs["question"]
-    history = inputs.get("history", "")
-
-    search_query = f"""
-    对话历史：
-    {history}
-    
-    当前问题：
-    {question}
-    """
-    return retrieve_context(search_query)
+     """先结合历史改写问题，再用改写结果检索论文。"""
+     question = inputs["question"]
+     history = inputs.get("history", "")
+     search_query =rewrite_question(question, history)
+     print(f"原问题：{question}")
+     print(f"改写后的检索问题：{search_query}")
+     return retrieve_context(search_query)
 
 def make_chain():
     """
@@ -231,10 +259,7 @@ if __name__ == "__main__":
     main()
 
 #检索优化 向量检索+关键词检索
-         #查询改写：先让模型改写问题再检索 提高检索命中率
 #docker部署
-#agent接入
-#mcp server
-#文件上传
+
 
 
