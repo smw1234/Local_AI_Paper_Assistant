@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Thesis Assistant</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=2">
 </head>
 <body>
   <div class="app-shell">
@@ -40,7 +40,16 @@
 
       <form class="composer" id="chatForm">
         <label class="visually-hidden" for="questionInput">输入问题</label>
+        <div class="selected-file" id="selectedFile" hidden>
+          <span class="selected-file-icon" aria-hidden="true">PDF</span>
+          <span class="selected-file-name" id="selectedFileName"></span>
+          <button class="remove-file-button" id="removeFileButton" type="button" aria-label="移除文件" title="移除文件">×</button>
+        </div>
+        <input class="visually-hidden" id="pdfInput" type="file" accept=".pdf,application/pdf">
         <textarea id="questionInput" rows="1" placeholder="询问你的论文……" autocomplete="off"></textarea>
+        <button class="attachment-button" id="attachmentButton" type="button" aria-label="添加 PDF" title="添加 PDF">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11.5 12 20a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9 9a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>
+        </button>
         <button class="send-button" id="sendButton" type="submit" aria-label="发送" title="发送">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12 20 4.8l-4.2 14.4-3.1-5.7-8.2-1.5Zm8.2 1.5 3.4-4.1"/></svg>
         </button>
@@ -48,6 +57,6 @@
       </form>
     </main>
   </div>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=2"></script>
 </body>
 </html>

@@ -8,10 +8,17 @@ const input = document.getElementById("questionInput");
 const form = document.getElementById("chatForm");
 const sendButton = document.getElementById("sendButton");
 const newChatButton = document.getElementById("newChatButton");
+const pdfInput = document.getElementById("pdfInput");
+const attachmentButton = document.getElementById("attachmentButton");
+const selectedFile = document.getElementById("selectedFile");
+const selectedFileName = document.getElementById("selectedFileName");
+const removeFileButton = document.getElementById("removeFileButton");
+const composer = document.querySelector(".composer");
 
 let conversations = loadConversations();
 let activeConversationId = null;
 let isSending = false;
+let selectedPdf = null;
 
 function loadConversations() {
   try {
@@ -170,6 +177,42 @@ async function askBackend(question, conversationId) {
   return data.data;
 }
 
+async function uploadPdf(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch("/api/upload", {
+    method: "POST",
+    body: formData,
+  });
+  const result = await response.json();
+  if (!response.ok || (result.code !== undefined && result.code !== 200)) {
+    throw new Error(result.message || `上传失败：HTTP ${response.status}`);
+  }
+  return result;
+}
+
+function showSelectedPdf(file) {
+  selectedPdf = file;
+  selectedFileName.textContent = file.name;
+  selectedFileName.title = file.name;
+  selectedFile.hidden = false;
+  composer.classList.add("has-file");
+}
+
+function clearSelectedPdf() {
+  selectedPdf = null;
+  pdfInput.value = "";
+  selectedFile.hidden = true;
+  selectedFileName.textContent = "";
+  composer.classList.remove("has-file");
+}
+
+function showUploadResult(text) {
+  if (!activeConversation()) renderMessages([]);
+  appendMessage("assistant", text);
+}
+
 async function sendQuestion(question) {
   let conversation = activeConversation();
   if (!conversation) {
@@ -224,14 +267,59 @@ async function sendQuestion(question) {
   }
 }
 
-form.addEventListener("submit", (event) => {
+form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const question = input.value.trim();
-  if (!question || isSending) return;
-  input.value = "";
-  input.style.height = "auto";
-  sendQuestion(question);
+  if ((!question && !selectedPdf) || isSending) return;
+
+  if (!selectedPdf) {
+    input.value = "";
+    input.style.height = "auto";
+    sendQuestion(question);
+    return;
+  }
+
+  const fileToUpload = selectedPdf;
+  let shouldSendQuestion = false;
+  isSending = true;
+  sendButton.disabled = true;
+  attachmentButton.disabled = true;
+  try {
+    const result = await uploadPdf(fileToUpload);
+    clearSelectedPdf();
+    showUploadResult(result.message || `已上传并加入知识库：${fileToUpload.name}`);
+    shouldSendQuestion = Boolean(question);
+  } catch (error) {
+    window.alert(`PDF 上传失败：${error.message}`);
+    return;
+  } finally {
+    isSending = false;
+    sendButton.disabled = false;
+    attachmentButton.disabled = false;
+    input.focus();
+  }
+
+  if (shouldSendQuestion) {
+    input.value = "";
+    input.style.height = "auto";
+    await sendQuestion(question);
+  }
 });
+
+attachmentButton.addEventListener("click", () => pdfInput.click());
+
+pdfInput.addEventListener("change", () => {
+  const file = pdfInput.files?.[0];
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith(".pdf") && file.type !== "application/pdf") {
+    window.alert("这里只能选择 PDF 文件。");
+    clearSelectedPdf();
+    return;
+  }
+  showSelectedPdf(file);
+});
+
+removeFileButton.addEventListener("click", clearSelectedPdf);
 
 input.addEventListener("input", () => {
   input.style.height = "auto";

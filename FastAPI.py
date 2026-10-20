@@ -3,14 +3,14 @@ from datetime import datetime
 import json
 from typing import Any
 from urllib.request import Request
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile
 from ollama._types import ChatRequest
 from pydantic import BaseModel
 from starlette.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 import logging
-from langchain_deepseek import ChatDeepSeek
+from Paper_Upload import add_pdf_to_database
 from Vector_Database import make_chain
 #连接static-新建会话写入文件-与AI交互-
 logging.basicConfig(level=logging.INFO,format='%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s')
@@ -125,6 +125,15 @@ def get_session(session_id:str)->ApiResponse:
     if os.path.exists(file_name):
        os.remove(file_name)
     return ApiResponse(code=200,message="删除成功",data=None)
+
+#pdf上传处理
+@app.post("/api/upload")
+async def upload_file(file:UploadFile)->ApiResponse:
+    file_bytes = await file.read()
+    result = add_pdf_to_database(file.filename or "uploaded.pdf", file_bytes)
+
+    return ApiResponse(code=200,message="上传成功",data=result)
+
 
 #异常处理器
 @app.exception_handler(Exception)
