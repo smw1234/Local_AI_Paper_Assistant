@@ -97,7 +97,7 @@ def build_database():
            )
            #转化为向量 按字段进行排序
            response_data = sorted(response.data, key=lambda item: item.index)
-           batch_vectors=[item.embedding for item in response.data]#response.data是一个列表
+           batch_vectors=[item.embedding for item in response_data]#response.data是一个列表
            # 为每个文本块记录论文文件名和块序号（主键）
            ids = [
                f"{pdf_path.name}-chunk-{start + i}"
