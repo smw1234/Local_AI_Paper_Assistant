@@ -12,6 +12,8 @@ from openai import OpenAI
 import logging
 from Paper_Upload import add_pdf_to_database
 from Vector_Database import make_chain
+from Paper_Agent import ask_agent
+
 #连接static-新建会话写入文件-与AI交互-
 logging.basicConfig(level=logging.INFO,format='%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s')
 
@@ -83,12 +85,19 @@ def chat(request:ChatRequest)->ApiResponse:
         f"{'用户' if item['role'] == 'user' else '助手'}：{item['content']}"
         for item in history_messages
     )
-    result = chain.invoke({
-        "question": request.question,
-        "history": history_text,
-    })
+    #chain方式
+    # result = chain.invoke({
+    #     "question": request.question,
+    #     "history": history_text,
+    # })
     # ChatDeepSeek 返回的 AIMessage 内容在 .content 里
-    answer_text = result.content
+    # answer_text = result.content
+
+    #agent方式
+    answer_text = ask_agent(
+        question=request.question,
+        history=history_text,
+    )
     history_messages.append({"role": "user","content": request.question})
     history_messages.append({"role":"assistant","content":answer_text})
     session_data["messages"]=history_messages
