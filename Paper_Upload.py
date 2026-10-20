@@ -14,19 +14,19 @@ def load_hash_cache() -> dict:
         return json.loads(HASH_CACHE_PATH.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
-
+#取出文件信息和缓存的哈希对比文件大小和最后修改时间
 def get_cached_hash(pdf_path: Path, hash_cache: dict) -> str:
-    """文件未变化时直接使用缓存；变化后才重新计算哈希。"""
-    stat = pdf_path.stat()
-    cached = hash_cache.get(pdf_path.name)
-
+    """文件未变化时直接使用缓存；变化后才重新计算哈希。哈希缓存里有大小和修改时间"""
+    stat = pdf_path.stat()#取出元信息 即大小和修改时间
+    cached = hash_cache.get(pdf_path.name)#按文件名查找对应的存储哈希（大小，时间，内容）
+    #缓存里有这个文件名 大小相等 修改时间相等 才复用内存中的哈希
     if (
         cached
         and cached.get("size") == stat.st_size
         and cached.get("mtime_ns") == stat.st_mtime_ns
     ):
-        return cached["sha256"]
-
+        return cached["sha256"]#只返回文件哈希内容
+    #反之需要重算并保存当前文件哈希
     file_hash = sha256(pdf_path.read_bytes()).hexdigest()
     hash_cache[pdf_path.name] = {
         "size": stat.st_size,
@@ -58,8 +58,8 @@ def add_pdf_to_database(filename: str, file_bytes: bytes) -> dict:
     DOCS_DIR.mkdir(parents=True, exist_ok=True)#目录不存在就创建
     new_file_hash = sha256(file_bytes).hexdigest()#对文件内容算 SHA-256 哈希，得到 64 位十六进制字符串（hexdigest）
 
-    hash_cache = load_hash_cache()
-    duplicate_path = None
+    hash_cache = load_hash_cache()#加载计算过的哈希 字典格式
+    duplicate_path = None #目前还没发现重复文件
 
     # 检查文件夹中的 PDF：文件名相同，或文件内容相同，都跳过
     for existing_path in DOCS_DIR.iterdir():
@@ -78,27 +78,28 @@ def add_pdf_to_database(filename: str, file_bytes: bytes) -> dict:
         # existing_hash = sha256(existing_path.read_bytes()).hexdigest()
 
         #优化 只按内容判断是否重复
-        existing_hash = get_cached_hash(existing_path, hash_cache)
-        if existing_hash == new_file_hash:
+        existing_hash = get_cached_hash(existing_path, hash_cache)#现有论文的哈希
+        if existing_hash == new_file_hash:#重复
             duplicate_path = existing_path
             break
     # 即使发现重复，也要先保存刚刚计算过的哈希缓存
     save_hash_cache(hash_cache)
+    #处理重复
     if duplicate_path:
         return {
                     "status": "duplicate",
                     "message": f"文件夹中已经有内容相同的论文：{existing_path.name}",
                     "filename": existing_path.name,
                 }
-    # 保存新论文
+    # 保存新论文 不重复时
     pdf_path = DOCS_DIR / filename #路径拼接
 
     # 同名但内容不同，给新文件加哈希后缀，避免覆盖
     if pdf_path.exists():
-        pdf_path = DOCS_DIR / f"{pdf_path.stem}_{new_file_hash[:8]}{pdf_path.suffix}"
+        pdf_path = DOCS_DIR / f"{pdf_path.stem}_{new_file_hash[:8]}{pdf_path.suffix}"#去掉后缀 加入哈希前八个字符 加上后缀
 
     pdf_path.write_bytes(file_bytes)#写入磁盘
-
+    #更新哈希缓存 加入新论文
     stat = pdf_path.stat()
     hash_cache[pdf_path.name] = {
         "size": stat.st_size,
