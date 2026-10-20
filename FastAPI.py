@@ -126,10 +126,10 @@ def get_session(session_id:str)->ApiResponse:
        os.remove(file_name)
     return ApiResponse(code=200,message="删除成功",data=None)
 
-#pdf上传处理
+#pdf上传异步处理
 @app.post("/api/upload")
 async def upload_file(file:UploadFile)->ApiResponse:
-    file_bytes = await file.read()
+    file_bytes = await file.read()#文件内容字节
     result = add_pdf_to_database(file.filename or "uploaded.pdf", file_bytes)
 
     return ApiResponse(code=200,message="上传成功",data=result)
