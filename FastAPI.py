@@ -72,7 +72,7 @@ def create_session()->ApiResponse:
 
 #与大模型进行交互
 @app.post("/api/chat")
-def chat(request:ChatRequest)->ApiResponse:
+async def chat(request:ChatRequest)->ApiResponse:
     #先加载文件中的会话数据-与模型交互获得回答-更新消息列表-保存到文件
     session_path=get_session_file_name(request.conversation_id)
     with open(session_path,"r",encoding="utf-8") as f:
@@ -94,7 +94,7 @@ def chat(request:ChatRequest)->ApiResponse:
     # answer_text = result.content
 
     #agent方式
-    answer_text = ask_agent(
+    answer_text = await ask_agent(
         question=request.question,
         history=history_text,
     )
