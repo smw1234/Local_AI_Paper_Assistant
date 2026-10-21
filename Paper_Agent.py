@@ -136,7 +136,7 @@ async def ask_agent(question: str, history: str = "") -> str:
     """
 
     # create_agent 的输入使用 messages。
-    result = await agent.aiinvoke({
+    result = await agent.ainvoke({
         "messages": [
             {"role": "user", "content": user_message}
         ]
