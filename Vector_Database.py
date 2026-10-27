@@ -156,7 +156,7 @@ def get_reranker():
     return _reranker
 
 
-def rerank_documents(query, documents, top_n=8):
+def rerank_documents(query, documents, top_n=11):
     """用 Reranker 对 RRF 初筛出的论文片段重新排序。"""
     if not documents:
         return []
@@ -186,7 +186,7 @@ def rerank_documents(query, documents, top_n=8):
     return [doc for score, doc in ranked[:top_n]]
 
 #定义检索器
-def retrieve_context(query,k=8,candidate_k=30):
+def retrieve_context(query,k=11,candidate_k=15):
     """向量检索和 BM25 关键词检索，再用 RRF 合并排名。之后用reranker精排"""
     #向量检索
     vector_docs = db.similarity_search_by_vector(
@@ -276,7 +276,7 @@ def tokenize(text):
     #re是正则表达式 r:\不是转义字符 [a-zA-Z0-9]+：任连续一串字母（不分大小写）或数字 +表示连续
     return re.findall(r"[a-zA-Z0-9]+", text.lower())
 
-def keyword_search(query, k=8):
+def keyword_search(query, k=11):
     """从 Chroma 取出文本块，用 BM25算法按关键词匹配度进行打分，取分数最高的k个返回。"""
     stored = db._collection.get(
         include=["documents", "metadatas"]
@@ -315,14 +315,20 @@ def keyword_search(query, k=8):
             break
     return results
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 #带有历史记录的检索
 def retrieve_context_with_history(inputs):
      """先结合历史改写问题，再用改写结果检索论文。"""
      question = inputs["question"]
      history = inputs.get("history", "")
      search_query =rewrite_question(question, history)
-     print(f"原问题：{question}")
-     print(f"改写后的检索问题：{search_query}")
+     # print(f"原问题：{question}")
+     # print(f"改写后的检索问题：{search_query}")
+     logger.info("原问题：%s", question)
+     logger.info("改写后的检索问题：%s", search_query)
      return retrieve_context(search_query)
 
 

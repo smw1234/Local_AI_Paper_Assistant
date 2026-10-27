@@ -10,6 +10,7 @@ from langchain_core.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from Vector_Database import qa_model, retrieve_context_with_history
+from langchain.agents.middleware import ToolCallLimitMiddleware
 
 # 获取当前 Python 文件所在目录。
 # MCP Server 和 Agent 文件放在项目根目录时，这样就能定位 MCP_Server.py。
@@ -18,13 +19,16 @@ MCP_SERVER_FILE = PROJECT_DIR / "MCP_Server.py"
 
 
 # 配置 MCP 客户端通过 stdio 启动本机 MCP Server。
+#改用http 只加载一次工具
 # 使用 sys.executable，确保子进程使用当前项目的 Python 环境。
 mcp_client = MultiServerMCPClient(
     {
         "paper_search": {
-            "command": sys.executable,
-            "args": [str(MCP_SERVER_FILE)],
-            "transport": "stdio",
+            # "command": sys.executable,
+            # "args": [str(MCP_SERVER_FILE)],
+            # "transport": "stdio",
+            "url": "http://127.0.0.1:8001/mcp",
+            "transport": "http",
         }
     }
 )
@@ -42,6 +46,7 @@ AGENT_SYSTEM_PROMPT = """
 6. 检索片段不足以支持回答时，明确说明“当前检索到的论文内容不足以回答这个问题”。
 7. 回答使用用户当前问题的语言；用户用中文提问时用中文回答。
 8. 回答时先直接回答，再简要说明依据；尽可能保留检索结果中的论文文件名作为来源。
+9. 每个用户问题最多调用一次 search_papers。收到检索结果后，直接根据已有结果回答，不要再次检索。
 """
 
 #不用本地agent 改为mcp tool
@@ -89,6 +94,13 @@ async def get_agent():
             model=qa_model,
             tools=_agent_tools,
             system_prompt=AGENT_SYSTEM_PROMPT,
+            middleware=[
+                ToolCallLimitMiddleware(
+                    tool_name="search_papers",
+                    run_limit=1,
+                    exit_behavior="continue",
+                )
+            ],
         )
 
     return _agent
