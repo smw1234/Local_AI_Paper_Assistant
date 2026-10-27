@@ -136,19 +136,68 @@ def embed_query(text:str):
     )
     return resp.data[0].embedding
 
+from FlagEmbedding import FlagReranker
+# 延迟加载：避免每次问答都重新加载模型。
+# 第一次实际需要重排时才加载，之后复用。
+_reranker = None
+
+#加载高精度二分排位模型 对混合检索的结果进行精选
+def get_reranker():
+    global _reranker
+
+    if _reranker is None:
+        # use_fp16=False：CPU/GPU 都较稳妥，但速度会慢一些。
+        # 模型首次加载时需要下载；下载后会缓存到本地。
+        _reranker = FlagReranker(
+            "BAAI/bge-reranker-v2-m3",
+            use_fp16=False,
+        )
+
+    return _reranker
+
+
+def rerank_documents(query, documents, top_n=8):
+    """用 Reranker 对 RRF 初筛出的论文片段重新排序。"""
+    if not documents:
+        return []
+
+    reranker = get_reranker()
+
+    # Reranker 对每个“问题、论文片段”进行组合
+    pairs = [
+        [query, doc.page_content]
+        for doc in documents
+    ]
+    scores = reranker.compute_score(pairs)#计算相关性分数
+
+    # 只有一个候选片段时，模型可能只返回一个分数而非分数列表。如果抛异常，就将scores转化为列表
+    try:
+        len(scores)
+    except TypeError:
+        scores = [scores]
+
+    # 分数越高，表示模型判断该论文片段与问题越相关。ranked里既有分数又有文档
+    ranked = sorted(
+        zip(scores, documents),#把分数和文档进行配对组成元组
+        key=lambda item: item[0],#item是列表里的每一个元素，即元组 取出每个元组里的分数进行降序排序
+        reverse=True,#降序排列
+    )
+    #取前八个元组，只返回文档不返回分数
+    return [doc for score, doc in ranked[:top_n]]
+
 #定义检索器
-def retrieve_context(query,k=8):
-    """向量检索和 BM25 关键词检索，再用 RRF 合并排名。"""
+def retrieve_context(query,k=8,candidate_k=30):
+    """向量检索和 BM25 关键词检索，再用 RRF 合并排名。之后用reranker精排"""
     #向量检索
     vector_docs = db.similarity_search_by_vector(
         embed_query(query),#把查询问题转化为向量
-        k=k,
+        k=candidate_k,
     )
     #关键词检索
-    keyword_docs = keyword_search(query, k=k)
+    keyword_docs = keyword_search(query, k=candidate_k)
     #准备融合
     fused_scores = {}#记录每个文档的分数
-    docs_by_key = {}#记录每个文档快的原文
+    docs_by_key = {}#记录每个文档块的原文
     #把两个榜单里出现的所有文档块，计算分数存入fused_scores，对应的文档存入docs_by_key
     for ranked_docs in (vector_docs, keyword_docs):#外层循环两次 一次向量列表 一个关键词列表
         for rank, doc in enumerate(ranked_docs, start=1):#序号从1开始，元素先是向量k个后是k个关键词
@@ -165,15 +214,27 @@ def retrieve_context(query,k=8):
         fused_scores,
         key=fused_scores.get,
         reverse=True,
-    )[:k]
+    )[:candidate_k]
+    #按融合分数排序好的文档对象列表
+    candidate_docs = [
+        docs_by_key[key]
+        for key in ranked_keys
+    ]
 
-    if not ranked_keys:
+    if not candidate_docs:
         return "没有检索到相关论文内容。"
 
+    #Reranker 精排，只保留最终需要的 k 个片段
+    final_docs = rerank_documents(
+        query=query,
+        documents=candidate_docs,
+        top_n=k,
+    )
+
     return "\n\n".join(
-        f"[论文：{docs_by_key[key].metadata.get('source', '未知')}]\n"
-        f"{docs_by_key[key].page_content}"
-        for key in ranked_keys
+        f"[论文：{doc.metadata.get('source', '未知')}]\n"
+        f"{doc.page_content}"
+        for doc in final_docs
     )
 
 #将问题结合历史记录进行改写
