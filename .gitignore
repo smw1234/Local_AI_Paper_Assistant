@@ -7,3 +7,6 @@ chroma_db/
 .idea/
 .env
 sessions
+/answer_cache.sqlite3
+/answer_cache.sqlite3-shm
+/answer_cache.sqlite3-wal
