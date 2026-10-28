@@ -9,7 +9,8 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from Vector_Database import qa_model, retrieve_context_with_history
+from Answer_Cache import find_cached_answer, save_answer_cache
+from Vector_Database import qa_model, retrieve_context_with_history, rewrite_question
 from langchain.agents.middleware import ToolCallLimitMiddleware
 
 # 获取当前 Python 文件所在目录。
@@ -32,6 +33,15 @@ mcp_client = MultiServerMCPClient(
         }
     }
 )
+
+from Answer_Cache import (
+    init_cache_db,
+    find_cached_answer,
+    save_answer_cache,
+)
+
+# 创建缓存表；如果表已存在，不会清空数据
+init_cache_db()
 
 # Agent 的系统提示词，负责约束它如何使用检索工具和回答问题。
 AGENT_SYSTEM_PROMPT = """
@@ -125,16 +135,50 @@ def _message_content_to_text(content) -> str:
 
     return str(content)
 
+async def check_answer_cache(user_message, history):
+    """
+    先复用数据库文件里的问题改写函数，再查询答案缓存。
+
+    返回：
+    rewritten_question：改写后的完整问题
+    cache_result：命中的缓存记录；未命中时为 None
+    """
+
+    # 直接复用 Vector_Database.py 里的函数，不在这里重复实现改写逻辑。
+    rewritten_question = rewrite_question(
+        user_message,
+        history,
+    )
+
+    # 用改写后的问题查询缓存。
+    cache_result = await find_cached_answer(
+        rewritten_question,
+        qa_model,
+    )
+
+    return rewritten_question, cache_result
 
 async def ask_agent(question: str, history: str = "") -> str:
     """
     FastAPI 调用这个函数来获取 Agent 的回答。
+    先查询历史缓存记录，命中直接返回，反之调用agent检索论文
     参数：
         question：用户当前的问题
         history：当前会话的历史记录
     返回：
         Agent 最终回答的文本
     """
+
+    # Agent 启动和论文检索前，先改写问题并查询缓存。
+    rewritten_question, cache_result = await check_answer_cache(
+        question,
+        history,
+    )
+    # 命中缓存时直接返回，不再调用 Agent 和 MCP 检索工具。
+    if cache_result is not None:
+        return cache_result["answer"]
+
+    #缓存未命中，才获取 Agent。
     # 把历史和当前问题一起交给 Agent。
     # 这样 Agent 在调用检索工具前，就能理解“它”“这个方法”等上下文指代。
     agent = await get_agent()
@@ -157,10 +201,12 @@ async def ask_agent(question: str, history: str = "") -> str:
     # Agent 的结果会包含用户消息、工具调用/返回消息和最终 AI 回答。
     # 从后往前找 最后一条AIMessage
     messages = result.get("messages", [])
+    # 取出答案保存到缓存
     for message in reversed(messages):
         if isinstance(message, AIMessage):
             answer = _message_content_to_text(message.content)
             if answer:
+                save_answer_cache(rewritten_question,answer)
                 return answer
 
     return "Agent 没有返回回答。"
