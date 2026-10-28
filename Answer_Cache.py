@@ -4,6 +4,7 @@
 """
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from langchain_chroma import Chroma
 
@@ -93,9 +94,9 @@ def add_cache_question_to_index(cache_id: int, question: str):
     question = question.strip()
     if not question:
         return
-
+    #因为返回的是列表 所以取第一个元素即【0】
     question_vector = embed_cache_texts([question])[0]
-
+    #写入数据库
     cache_question_collection.upsert(
         ids=[str(cache_id)],
         documents=[question],
@@ -129,13 +130,13 @@ def build_cache_question_index(batch_size: int = 10) -> int:
     existing_records = cache_question_collection.get(
         include=["metadatas"]
     )
-    existing_ids = set(existing_records["ids"])
-
+    existing_ids = set(existing_records["ids"])#set转成集合
+    #需要添加的问题
     missing_rows = [
         row for row in rows
         if str(row[0]) not in existing_ids
     ]
-
+    #记录新增条数
     added_count = 0
 
     # 分批向量化，避免一次提交过多文本。
@@ -161,10 +162,7 @@ def build_cache_question_index(batch_size: int = 10) -> int:
 
     return added_count
 
-def search_cache_question_index(
-    rewritten_question: str,
-    k: int = 5,
-) -> list[dict]:
+def search_cache_question_index(rewritten_question: str,k: int = 5) -> list[dict]:
     """
     在缓存问题的向量索引中找最相似的前 k 个候选问题。
 
@@ -174,14 +172,14 @@ def search_cache_question_index(
     rewritten_question = rewritten_question.strip()
     if not rewritten_question:
         return []
-
+    #检查是否有索引
     total_count = cache_question_collection.count()
     if total_count == 0:
         return []
 
     # Chroma 要求 n_results 不能大于 collection 中的记录数。
     result_count = min(k, total_count)
-
+    # 把查询问题转向量
     query_vector = embed_cache_texts([rewritten_question])[0]
 
     result = cache_question_collection.query(
@@ -237,7 +235,7 @@ def normalize_question(question: str) -> str:
 
 def save_answer_cache(rewritten_question: str, answer: str):
     """
-    保存一组“改写后的问题 + 最终回答”到缓存。
+    保存一组“改写后的问题 + 最终回答”到缓存。并将问题加入向量索引
 
     参数：
     rewritten_question：Vector_Database.py 改写后的完整问题，
@@ -260,26 +258,44 @@ def save_answer_cache(rewritten_question: str, answer: str):
     # 用改写后的问题生成精确匹配字段。
     normalized_question = normalize_question(rewritten_question)
 
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            """
-            INSERT INTO answer_cache (
-                question,
-                normalized_question,
-                answer
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO answer_cache (
+                    question,
+                    normalized_question,
+                    answer
+                )
+                VALUES (?, ?, ?)
+                ON CONFLICT(normalized_question) DO NOTHING
+                """,
+                (
+                    rewritten_question,
+                    normalized_question,
+                    answer,
+                ),
             )
-            VALUES (?, ?, ?)
-            ON CONFLICT(normalized_question) DO NOTHING
-            """,
-            (
-                rewritten_question,
-                normalized_question,
-                answer,
-            ),
-        )
+            #存入记录之后，取出这条记录的id
+            row=conn.execute(
+                """
+                 SELECT id
+                 FROM answer_cache
+                 WHERE normalized_question = ?
+                 """,
+                (normalized_question,),
+            ).fetchone()
 
-    # 如果该规范化问题之前已经保存过，DO NOTHING 会保留旧记录，
-    # 不会重复插入，也不会覆盖之前的回答。
+        if row is None:
+            raise  RuntimeError("缓存已写入，但没有找到对应的 SQLite 记录 id。")
+        cache_id = int(row[0])
+        # SQLite 保存成功后，再将同一个问题加入 Chroma 向量索引。
+        # 即使索引添加失败，SQLite 里的问题和答案仍然保留；
+        # 下次启动时 build_cache_question_index() 可以补建缺失索引。
+        try:
+            add_cache_question_to_index(cache_id, rewritten_question)
+        except Exception as e:
+            print(f"[缓存索引] 问题已保存到 SQLite，但加入向量索引失败：{e}")
 
 def find_exact_match(rewritten_question: str):
     """策略一：规范化后完全相同，就直接返回缓存答案。"""
@@ -329,10 +345,11 @@ async def find_semantic_match(rewritten_question: str, llm):
         int(candidate["cache_id"])
         for candidate in vector_candidates
     ))
-
+    #sql里要求确切长度，但候选id列表是动态的 所以用占位符方式
+    #eg：如果有三个id  "?, ?, ?"
     placeholders = ", ".join("?" for _ in candidate_ids)
 
-    # 向量索引筛选候选。
+    # 向量索引筛选候选。按照id 取出候选中对应的历史记录
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
             f"""
@@ -347,9 +364,9 @@ async def find_semantic_match(rewritten_question: str, llm):
     if not rows:
         return None
 
-    # SQLite 的 IN 查询不保证保留向量检索的顺序。
+    # SQLite 的 IN 查询不保证保留向量检索的顺序。即rows乱序了
     # 按 Chroma 给出的候选顺序重新排列。
-    rows_by_id = {int(row[0]): row for row in rows}
+    rows_by_id = {int(row[0]): row for row in rows}#eg：{5: (5,...), 1: (1,...), 8: (8,...)}
     rows = [
             rows_by_id[cache_id]
             for cache_id in candidate_ids
