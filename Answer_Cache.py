@@ -7,6 +7,11 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 from langchain_chroma import Chroma
+import sqlite3
+from contextlib import closing
+
+#最大对话记录缓存上限
+MAX_CACHE_ENTRIES = 500
 
 # SQLite 数据库文件放在 Answer_Cache.py 所在的项目目录下。
 # 第一次运行时会自动创建这个文件；之后运行会继续使用原来的文件。
@@ -235,7 +240,7 @@ def normalize_question(question: str) -> str:
 
 def save_answer_cache(rewritten_question: str, answer: str):
     """
-    保存一组“改写后的问题 + 最终回答”到缓存。并将问题加入向量索引
+    保存一组“改写后的问题 + 最终回答”到缓存。并将问题加入向量索引以及更新缓存上限
 
     参数：
     rewritten_question：Vector_Database.py 改写后的完整问题，
@@ -296,6 +301,15 @@ def save_answer_cache(rewritten_question: str, answer: str):
             add_cache_question_to_index(cache_id, rewritten_question)
         except Exception as e:
             print(f"[缓存索引] 问题已保存到 SQLite，但加入向量索引失败：{e}")
+
+        # 新缓存写入后检查总数，超出 500 条就清理最旧记录。
+        try:
+            deleted_count = cleanup_answer_cache()
+            if deleted_count:
+                print(f"[缓存清理] 已删除最旧缓存：{deleted_count} 条")
+        except Exception as e:
+            # 清理失败不应阻断当前问答；下次启动时还可以再清理。
+             print(f"[缓存清理] 本次清理失败：{e}")
 
 def find_exact_match(rewritten_question: str):
     """策略一：规范化后完全相同，就直接返回缓存答案。"""
@@ -457,3 +471,62 @@ async def find_cached_answer(rewritten_question: str, llm):
 
     # 两种缓存匹配策略都没有找到答案。
     return None
+
+def cleanup_answer_cache(max_entries: int = MAX_CACHE_ENTRIES) -> int:
+    """
+    将缓存数量限制在 max_entries 条以内。
+
+    超出上限时，按照创建时间从早到晚删除旧记录；
+    同时用 SQLite 的 id 删除 Chroma 向量索引中的对应问题。
+
+    返回本次删除的记录数量。
+    """
+    if max_entries < 1:
+        raise ValueError("缓存上限必须至少为 1。")
+
+    # 先计算需要清理的旧记录，并读取它们的 SQLite id。纯查询
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        #计算数据库总行数
+        total_count = conn.execute(
+            "SELECT COUNT(*) FROM answer_cache"
+        ).fetchone()[0]
+        #超出最大限制的数量
+        excess_count = max(0, total_count - max_entries)
+        #没超出
+        if excess_count == 0:
+            return 0
+        #超出 查出最旧的excess_count条数据 ASC升序排序
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM answer_cache
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+            """,
+            (excess_count,),
+        ).fetchall()
+    #取出要删除的数据id
+    old_ids = [int(row[0]) for row in rows]
+    if not old_ids:
+        return 0
+
+    # 先删除 Chroma 中对应的向量记录。按照id
+    # 如果此操作失败，函数会报错，SQLite 里的原缓存仍会保留。
+    cache_question_collection.delete(
+        ids=[str(cache_id) for cache_id in old_ids]
+    )
+
+    # Chroma 删除成功后，再删除 SQLite 中对应的问题和答案。
+    placeholders = ", ".join("?" for _ in old_ids)
+
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        with conn:
+            conn.execute(
+                f"""
+                DELETE FROM answer_cache
+                WHERE id IN ({placeholders})
+                """,
+                old_ids,
+            )
+
+    return len(old_ids)

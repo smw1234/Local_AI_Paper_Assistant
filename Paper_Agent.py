@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from Answer_Cache import find_cached_answer, save_answer_cache, build_cache_question_index
+from Answer_Cache import find_cached_answer, save_answer_cache, build_cache_question_index, cleanup_answer_cache
 from Vector_Database import qa_model, retrieve_context_with_history, rewrite_question
 from langchain.agents.middleware import ToolCallLimitMiddleware
 
@@ -42,6 +42,13 @@ from Answer_Cache import (
 
 # 创建缓存表；如果表已存在，不会清空数据
 init_cache_db()
+
+try:
+    deleted_count = cleanup_answer_cache()
+    print(f"[缓存清理] 启动时删除旧缓存：{deleted_count} 条")
+except Exception as e:
+    print(f"[缓存清理] 启动时清理失败：{e}")
+
 # 为 SQLite 里已有、但 Chroma 里还没有的问题补建向量索引
 added_count = build_cache_question_index()
 print(f"本次补入缓存问题索引：{added_count} 条")
